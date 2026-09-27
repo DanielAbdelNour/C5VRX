@@ -13,3 +13,5 @@ scratch/
 *_log.txt
 packages/
 release_download/
+*.log
+build_ci/
