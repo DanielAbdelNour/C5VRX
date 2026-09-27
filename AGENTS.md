@@ -17,6 +17,45 @@ current hardware findings in `/docs` take precedence. Do not reintroduce a
 rejected architecture before reading the corresponding current and legacy
 findings that explain its failure.
 
+## Design flexibility and optimization priority
+
+C5VRX is intentionally flexible. Historical implementations, names, data
+representations, LUT layouts, demodulator structures, calibration curves,
+intermediate formats, and previously explored architectures are **not design
+requirements by themselves**.
+
+- Treat only explicitly stated hardware, realtime, electrical, compatibility,
+  safety, and experimentally proven constraints as hard constraints.
+- A requirement that belongs to one experiment or feasibility study applies
+  only to that scoped experiment unless this file or the current task
+  explicitly promotes it to a project-wide invariant.
+- Do not preserve an existing implementation detail merely because Golden,
+  an older PR, a proof script, or a document used it. In particular, exact
+  byte-for-byte equivalence with an existing LUT, DAC transfer, state encoding,
+  or intermediate representation is **not required** unless explicitly stated
+  for the current task.
+- Prefer a simpler, smarter, cheaper, faster, more robust, or higher-quality
+  architecture whenever evidence shows that it satisfies the real project
+  requirements. A clean redesign is preferable to forcing a new idea through
+  legacy assumptions.
+- Optimize for the actual end goal: best practical receiver/video quality,
+  reliable realtime operation, useful range, low artifacts, and maintainable
+  implementation on the available hardware. Internal equivalence to a prior
+  design is secondary.
+- Negative feasibility results must be read with their assumptions intact.
+  If a proof rules out a stricter target, remove or change that unnecessary
+  target before concluding that the broader problem is impossible.
+- When two approaches are viable, prioritize the one with fewer dependencies,
+  fewer realtime stages, less state, less memory/compute pressure, and stronger
+  hardware evidence. Do not add complexity solely to preserve legacy behavior.
+- Existing working implementations such as Golden are baselines for measured
+  quality and regression testing, not immutable architectures. A replacement
+  may differ internally and numerically as long as it meets or improves the
+  externally relevant behavior and passes the applicable hardware tests.
+- Stay willing to change direction when new measurements, proofs, or hardware
+  capabilities reveal a better route. Document why an old assumption was
+  dropped so future work does not accidentally restore it.
+
 ## Current realtime invariants
 
 - VTX presence and USB must never gate or pace IQ production.
