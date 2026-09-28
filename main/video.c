@@ -2172,6 +2172,7 @@ static void lab_run_far_gain_probe(void)
 
 typedef struct {
     int p_median;
+    int p95;
     int origin_permille;
 } centered_q4_metrics_t;
 
@@ -2195,12 +2196,15 @@ static centered_q4_metrics_t measure_centered_q4(const uint8_t *sample, size_t b
     centered_q4_metrics_t m = {.origin_permille = bytes ?
         (int)(origin * 1000u / bytes) : 1000};
     unsigned cumulative = 0;
+    const unsigned p95_rank = (unsigned)((bytes * 95u + 99u) / 100u);
+    bool median_found = false;
     for (unsigned p = 0; p <= 128u; ++p) {
         cumulative += hist[p];
-        if (cumulative >= (bytes + 1u) / 2u) {
+        if (!median_found && cumulative >= (bytes + 1u) / 2u) {
             m.p_median = (int)p;
-            break;
+            median_found = true;
         }
+        if (cumulative >= p95_rank) { m.p95 = (int)p; break; }
     }
     return m;
 }
@@ -2218,8 +2222,8 @@ static void lab_run_rssi_gain_probe(void)
     printf(" Channel: %s (%u MHz) | Target: P~22\n",
            rf_get_current_channel()->name, rf_get_current_channel()->freq_mhz);
     printf("-------------------------------------------------------\n");
-    printf(" Gain  | RSSI (dBm) | P raw/center | Q_phase | Outer | Origin raw/center | Status\n");
-    printf("-------+------------+--------------+---------+-------+-------------------+--------\n");
+    printf(" Gain RF/BB/Fine | RSSI (dBm) | P50 raw/ctr | P95 ctr | Q_phase | Outer | Origin raw/ctr | Status\n");
+    printf("-----------------+------------+-------------+---------+---------+-------+----------------+--------\n");
 
     const uint8_t test_gains[] = {15, 30, 45, 60, 75, 81};
     uint8_t saved_gain = s_current_gain;
@@ -2249,18 +2253,21 @@ static void lab_run_rssi_gain_probe(void)
                                                      CONTROL_SAMPLE_BYTES, ring_offset);
         centered_q4_metrics_t center = measure_centered_q4(s_control_sample_buf,
                                                             CONTROL_SAMPLE_BYTES);
+        arc_gain_tuple_t tuple = {0};
+        (void)arc_gain_tuple_decode(rf_get_arc_gain_table(), g, &tuple);
 
         const char *verdict = "STARVED";
         if (m.clip_permille >= 20 || m.p_median > 40) verdict = "HIGH P/OUTER";
         else if (m.p_median >= 19 && m.p_median <= 25) verdict = "SWEET SPOT";
         else if (m.p_median >= 12) verdict = "USABLE";
 
-        printf(" G%-3u | %-6s%-4d | %3d/%-8d | %-6d%% | %-5d | %3d/%-13d | %s\n",
-               g,
+        printf(" G%-3u %u/%u/%u | %-6s%-4d | %3d/%-7d | %-7d | %-6d%% | %-5d | %3d/%-10d | %s\n",
+               g, tuple.rf_stage, tuple.bb_code, tuple.fine_code,
                rssi_ok ? "" : "NA/",
                rssi_val,
                m.p_median,
                center.p_median,
+               center.p95,
                m.q_phase,
                m.clip_permille / 10,
                m.origin_permille / 10,
