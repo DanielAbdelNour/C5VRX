@@ -2,7 +2,7 @@
   <img src="assets/c5vrx-phase8-logo.png" alt="C5VRX Phase8 logo" width="760" />
 
   <p><strong>ESP32-C5 Analog 5.8 GHz FPV Receiver</strong></p>
-  <p>From live RF to real-time analog NTSC composite video with one Seeed Studio XIAO ESP32-C5 and a passive resistor DAC.</p>
+  <p>From live 5.8 GHz FPV video to real-time analog CVBS with one Seeed Studio XIAO ESP32-C5 and a passive resistor DAC.</p>
 
   <p>
     <a href="https://twotoz.github.io/C5VRX/"><img src="https://img.shields.io/badge/Web%20Flasher-Online-1f6feb?style=flat" alt="Web Flasher" /></a>
@@ -18,49 +18,35 @@
 
 ---
 
-> [!IMPORTANT]
-> **Development notice**
->
-> I'm taking a temporary step back from active C5VRX development. The project has grown into a lot of work and takes a significant amount of time. I recently graduated, and I'm currently spending a lot of time applying for jobs and focusing on that next step, so I simply don't have much time to keep developing C5VRX at the same pace.
->
-> **C5VRX is not abandoned.** Development will just be slower for a while. Contributions, testing, ideas, and discussion are still very welcome. Thanks for all the support and understanding!
->
-> — Twotoz
+## Current firmware
 
-## Range / demod research
+The `main` build defaults to the live adjacent Phase8 demodulator and Direct
+Gain V3. Phase8 maps the full signed adjacent phase delta (-128 through +127)
+to the 6-bit DAC. A transition across the +/-180 degree phase boundary can
+still alias. Direct Gain V3 uses centered Q4 amplitude and Phase8 coherence to
+adjust RF gain, with a zero-write hold when the signal is healthy.
 
-The current experimental range work measures semantic CVBS sync and the exact-adjacent winding loss hidden by the 50 ns endpoint discriminator. See `docs/range-demod-quality-v2.md` for the measurement model and hardware validation rules.
+The combined build was flashed and observed with the VTX on. The operator
+reported a clean picture; USB telemetry showed 98-99% coherence, no clipping,
+and no RX/TX transport errors during that observation. This is a live hardware
+check, not a characterization of every signal level or flight condition. The
+menu and console still label V3 as a test profile because further range and
+transition testing remains useful.
 
-The default live configuration uses the adjacent Phase8 demodulator with
-Direct Gain V3. Phase8 maps the complete signed adjacent phase-delta range to
-the 6-bit video DAC; steps crossing the phase wrap can still alias. Direct
-Gain V3 uses centered Q4 measurements and the generated Phase8 gain map to
-adjust RF gain while holding when the signal is stable. The live hardware
-check showed a clean picture with the VTX on, high IQ coherence and no clipping.
+## Demodulator and gain notes
 
-Pre-Q4 receiver characterization is documented in `docs/pre-q4-lab.md`. The
-lab can isolate TX/DAC self-noise, sweep the complete highest RF-stage portion
-of the generated vendor gain table, and request a fresh vendor PHY calibration
-on the next boot without promoting undocumented RXDC/IQ/filter writers into
-production.
-
-Hardware walk tests now show that useful generated gain spans almost the full
-vendor table: roughly G14-G18 at extreme close range, G35-G56 through
-close/medium conditions, and G77-G81 at the weakest tested range. The
-gain-first ARC V3 A/B profile uses raw-Q4 occupancy/coherence, temporal
-median filtering and asymmetric hysteresis to follow that changing operating
-region without the old G62 starvation trap. In the latest close -> far -> close
-test, the gain trajectory moved from about G16 to G81 and back toward G39, and
-a location that previously represented the practical far limit produced good
-video. These are empirical calibration anchors, not calibrated dB values; the
-next step is a repeatable Q4-state -> gain search table, ideally validated with
-known RF attenuation.
-
-The current Range v2 work is documented in:
-- `docs/range-v2.md` — implementation and validation overview;
-- `docs/range-v2-knowledge.md` — preserved control/demod engineering knowledge;
-- `docs/range-v2-research-notes.md` — RF research hypotheses and hardware test plan.
-- `docs/trajectory-v2.md` — two-bundle adjacent-trajectory demod, confidence model and PLL-lite validation plan.
+- [Direct Gain V3 design](docs/direct-gain-v3-core.md) describes the Q4
+  observer, gain model, settle logic, and known hardware tuning limits.
+- [Direct Gain V3 measurement oracle](docs/direct-gain-v3-oracle.md) documents
+the guarded USB measurements and their interpretation.
+- [Range and demod quality](docs/range-demod-quality-v2.md) records the
+  measurement model and validation limits for CVBS sync and demod quality.
+- [Range v2](docs/range-v2.md), [range notes](docs/range-v2-knowledge.md),
+and [trajectory v2](docs/trajectory-v2.md) are research references; their
+experimental ideas are not all part of the default live path.
+- [Pre-Q4 lab](docs/pre-q4-lab.md) documents explicit RF/DAC noise checks and
+vendor gain-table characterization. Those lab actions are not run as part of
+normal video reception.
 
 ## Web Flasher (Zero-Install Browser Flashing)
 
@@ -116,7 +102,7 @@ Questions, build photos, feedback, or development discussion? **[Join the C5VRX 
 
 **C5VRX-3** turns the **Seeed Studio XIAO ESP32-C5** (ESP32-C5 RISC-V SoC) into a standalone 5.8 GHz analog video (FPV) receiver.
 
-It captures raw Wi-Fi PHY I/Q samples directly from the 5 GHz RF front-end at 40 MS/s, demodulates Wideband FM (WBFM) in real-time hardware using the ESP32-C5 **BitScrambler**, and outputs analog NTSC composite video (CVBS) via **PARLIO TX** and a 6-bit passive resistor DAC ladder into standard 75-ohm FPV goggles or monitors.
+It captures raw Wi-Fi PHY I/Q samples from the 5 GHz RF front-end at 40 MS/s, demodulates wideband FM in the ESP32-C5 **BitScrambler**, and outputs analog CVBS through **PARLIO TX** and a 6-bit passive resistor DAC ladder. The video-standard detector supports PAL and NTSC timing.
 
 ```text
 5.8 GHz Analog FPV (48 Channels)
@@ -140,7 +126,7 @@ PARLIO TX @ 40 MHz ([D,D] mode -> 20 MS/s unique CVBS output)
 6-bit Resistor DAC Ladder + 470 pF Filter -> 75-ohm Goggles
 ```
 
-After startup, the CPU does not process pixels; the entire pipeline runs continuously in dedicated silicon peripherals (AHB GDMA $\to$ BitScrambler $\to$ PARLIO TX).
+The continuous pixel path runs in AHB GDMA, BitScrambler, and PARLIO TX. A background CPU task observes completed IQ buffers and controls receiver settings; it does not move individual video pixels.
 
 ---
 
@@ -151,27 +137,27 @@ After startup, the CPU does not process pixels; the entire pipeline runs continu
 - **The Solution**: C5VRX-3 patches `dw0.suc_eof = 0` across the descriptor ring in SRAM after driver initialization, paired with 64-byte aligned cache synchronization (`sync_dma_c2m`).
 - **The Result**: Truly gapless, infinite circular streaming with zero wrap bubbles, rock-solid vertical sync lock, and crystal-clear horizontal alignment.
 
-### 2. Direct Gain V3 (default)
-- A fast observer measures centered Q4 IQ occupancy and coherence and uses the generated Phase8 gain lookup to choose a gain target.
-- V3 is the sole automatic gain writer in this build. It holds gain when measurements are stable and rejects measurements taken during the settling interval after a write.
-- Hardware validation with the VTX on showed a clean picture, high coherence, no clipping and no transport errors.
+### 2. Direct Gain V3 default gain controller
+- The fast observer measures centered Q4 P50/P90/P95, phase coherence, clipping, and origin occupancy from completed RX buffers.
+- V3 is the sole automatic gain writer in the default profile. It chooses physical RF/BB/Fine gain tuples and waits for settled observations after writes.
+- Healthy measurements produce a zero-write hold. A live check with the VTX on showed a clean picture and no clipping or transport errors; broader range and transition testing remains useful.
 
-### 3. Fixed BW40 Analog Front-End
-- **BW40 is the production RF contract**: C5VRX keeps the wide analog front-end selected with `phy_wifi_fbw_sel(1)` during startup and after every channel retune.
-- **No runtime BW20 gearbox**: Hardware testing demonstrated that narrow bandwidth rolls off part of the analog-FM video spectrum, reducing detail and causing chroma instability.
-- **No bandwidth-switch transient in flight**: Weak-signal recovery is handled continuously by ARC V3 and the demodulator while RF bandwidth remains fixed.
+### 3. Default RF settings
+- The default Direct Gain V3 profile uses BW40 and AFC off. This keeps gain as the changing RF control during normal operation.
+- Other receiver profiles and lab modes remain selectable over the serial console. Some experimental profiles can use automatic bandwidth or AFC while acquiring a carrier.
 
 ### 4. Phase8 adjacent demodulator
-- `fm_phase8_hr_live.bsasm` uses adjacent I/Q samples at 20 MS/s and maps the full signed phase-delta range (\u2212128 through +127 bins) across the 64 DAC levels.
-- The mapping preserves direction and detail across the signed range. A phase step that crosses the \u00b1180\u00b0 representation boundary remains ambiguous and can alias.
-- The live Phase8 build was checked on hardware with Direct Gain V3 and produced a clean picture with the VTX on.
+- `fm_phase8_hr_live.bsasm` uses adjacent I/Q samples at 20 MS/s and maps the full signed phase-delta range (-128 through +127 bins) across the 64 DAC levels.
+- The mapping preserves direction across the signed range. A phase step that crosses the +/-180 degree representation boundary remains ambiguous and can alias.
+- Phase8 is selected by default in the current build and was viewed live with Direct Gain V3.
 
-### 5. Soft-Noise Squelched Squelch & Pedestal Management
-- Large ambiguous phase deltas outside safe trajectory winding are mapped to blanking pedestal (DAC code 20) instead of sync tip (DAC code 0), eliminating false horizontal sync triggers and tearing during static.
+### Known limits
+- A signed adjacent-phase estimate cannot distinguish an actual step beyond 180 degrees from its wrapped equivalent.
+- The hardware observation documented above covers a working live picture at the tested VTX and receiver setup. It does not establish performance at all distances, channels, antenna orientations, or gain transitions.
 
 ---
 
-## Hardware Pinout & Circuit (Seeed Studio XIAO ESP32-C5)
+## Hardware Pinout (Seeed Studio XIAO ESP32-C5)
 
 Connect a 6-bit binary-weighted resistor DAC ladder to the XIAO pins, meeting at the `VIDEO` node:
 
@@ -185,11 +171,11 @@ Connect a 6-bit binary-weighted resistor DAC ladder to the XIAO pins, meeting at
 | **D9** | GPIO 9  | Bit 5 (MSB) | 240 Ω |
 | **GND** | GND | Ground | Ground reference |
 
-### Recommended Analog Filters:
-1. **Shunt Termination**: 200 Ω resistor from `VIDEO` to `GND`. When connected to goggles with standard 75 Ω termination, this forms a matched 0–1.0 V standard CVBS level.
-2. **De-Emphasis Filter**: A **470 pF ceramic capacitor** placed in parallel across `VIDEO` and `GND` creates a 10–14 dB high-frequency de-emphasis low-pass filter, dramatically reducing triangular FM noise and snow.
-3. **BOOT Button**: The built-in BOOT button (GPIO 28) switches channels on short click. A long press opens the standalone PAL/NTSC menu; short presses move between pages and a long press applies the selected action. On the CHANNEL page, a long press scans all 48 channels and selects the strongest coherent carrier. If a persisted Safe Flight setting blocks normal menu entry, hold BOOT for three seconds to restore GOLDEN/6BIT@40/ARC and open the recovery menu.
-4. **Persistent settings**: Channel, RF bandwidth mode, AFC/output/video-standard modes, AGC/manual gain and the BOOT-menu preference are stored in NVS and restored after restart.
+### Output network and controls
+1. **Video level**: The reference circuit uses a 200 ohm shunt at `VIDEO`; the connected display or goggles may add their own 75 ohm termination. Check the resulting level with the load you use.
+2. **Output filter**: The reference circuit uses a 470 pF ceramic capacitor from `VIDEO` to `GND`. Check image sharpness with your display and termination.
+3. **BOOT button**: A short click switches channel. A long press opens the menu when enabled; short clicks move through menu choices and a long press applies one. On the CHANNEL page, a long press scans the available channels and selects the strongest coherent carrier. If Safe Flight mode blocks the menu, hold BOOT for three seconds to restore the default Phase8/6BIT@40/Direct Gain profile and open the recovery menu.
+4. **Persistent settings**: Channel, RF bandwidth, AFC, video-standard/output, AGC/gain, and the BOOT-menu preference are saved and restored after restart.
 
 ---
 
@@ -206,7 +192,9 @@ Connecting to the USB serial console (115200 baud) provides live telemetry and s
 | `,` / `.` | Fine-tune carrier frequency offset in ±50 kHz steps |
 | `0` | Reset frequency offset to 0 kHz |
 | `e` | Toggle RX sample clock edge (POS / NEG) |
-| `d` | Print real-time reception diagnostics summary |
+| `d` | Print the live diagnostics summary and available console commands |
+| `R` | Run the guarded RSSI and centered-Q4 measurement probe |
+| `D` / `I` / `Y` | Select Direct Gain V3 / Direct Gain V1 / ARC V3 profiles |
 
 ---
 
@@ -255,8 +243,8 @@ The build produces three critical binaries in `build/`:
 
 ---
 
-### Step 2: Verify Architectural Constraints
-Before flashing, run the built-in validator to ensure zero DMA/BitScrambler constraint violations:
+### Step 2: Validate the firmware sources
+CI runs the architectural validator and host demodulation checks. To run the repository validator locally:
 ```bash
 python tools/validate_build.py
 ```
@@ -302,32 +290,19 @@ Use the interactive hotkeys (`c` to cycle channels, `+`/`-` for manual gain, `a`
 ## Repository Structure
 
 ```text
-├── CMakeLists.txt             # Production top-level ESP-IDF project
-├── sdkconfig.defaults         # Production build configuration (ESP32-C5 @ 240MHz)
-├── partitions.csv             # Custom minimal partition table
-├── main/                      # Standalone C5VRX-3 production firmware
-│   ├── CMakeLists.txt         # Component manifest & BitScrambler registration
-│   ├── main.c                 # Application entry point
-│   ├── rf.c / rf.h            # Wi-Fi PHY RX-only frontend & frequency tuning
-│   ├── video.c / video.h      # Realtime PARLIO RX/TX, Zero-EOF GDMA & AGC engine
-│   ├── fm.bsasm               # Phase5 BitScrambler demodulator program
-│   └── osd_font.h             # 8x8 font tables for OSD
-├── web/                       # Zero-install Betaflight-style Web Flasher (Web Serial API)
-│   ├── index.html             # Flasher dashboard UI
-│   ├── style.css              # Dark slate theme with blue accents & white topbar
-│   ├── app.js                 # Web Serial flasher & release management logic
-│   └── esptool.js             # Vendored esptool-js client with ESP32-C5 support
-├── tools/                     # Production validation & flashing utilities
-│   ├── open_webflasher.py     # Local offline Web Flasher launcher & HTTP server
-│   ├── validate_build.py      # Architectural constraint validator
-│   ├── auto_flash.py          # Auto-detecting flashing watcher
-│   ├── flash.py               # One-click direct flasher
-│   ├── monitor.py             # Low-latency interactive serial console
-│   └── live_logger.py         # Real-time CSV telemetry logger
-├── docs/                      # Architectural specs & mathematical proofs
-└── legacy/
-    ├── c5vrx1/                # Original proof-of-concept repository snapshot
-    └── c5vrx2/                # Complete historical C5VRX-2 firmware, research & tools
+C5VRX/
++-- main/
+|   +-- video.c, video.h             # Video pipeline, gain controller, menu, console
+|   +-- fm_phase8_hr_live.bsasm      # Default live Phase8 demodulator
+|   +-- direct_gain_v3.c, .h         # Default automatic gain controller
+|   +-- phase8_gain_lut.h            # Generated Phase8 coherence/gain lookup
+|   +-- rf.c, rf.h                   # ESP32-C5 RF and PHY controls
++-- assets/                          # Project branding
++-- docs/                            # Design notes and hardware measurements
++-- tools/                           # Build checks, generators, and flash utilities
++-- web/                             # Browser Web Serial flasher
++-- sdkconfig.defaults               # ESP-IDF defaults
++-- partitions.csv                   # Flash partition table
 ```
 
 ---
@@ -336,4 +311,4 @@ Use the interactive hotkeys (`c` to cycle channels, `+`/`-` for manual gain, `a`
 
 C5VRX is open-source software licensed under the **GNU General Public License v3.0 only** (`GPL-3.0-only`).
 
-See [LICENSE](LICENSE) for full licensing terms.
+See [LICENSE](LICENSE) for full licensing terms. The C5VRX name and logos have separate terms; see [assets/BRANDING.md](assets/BRANDING.md).
