@@ -34,7 +34,8 @@ bsasm_files = list(MAIN.glob("*.bsasm"))
 check("BitScrambler source artifacts, including historical Trajectory, remain available",
       {f.name for f in bsasm_files} == {"fm.bsasm", "fm_relative_golden.bsasm", "fm_phase5_360.bsasm",
                                       "fm_phase5_fsm_capture.bsasm", "bs_relative_worker_probe.bsasm",
-                                      "bs_relative_middle_probe.bsasm", "bs_addctia_probe.bsasm", "fm4.bsasm", "fm_traj.bsasm"},
+                                      "bs_relative_middle_probe.bsasm", "bs_addctia_probe.bsasm", "fm4.bsasm", "fm_traj.bsasm",
+                                      "fm_phase8_hr_live.bsasm"},
       f"found {[f.name for f in bsasm_files]}")
 
 for bsasm_file in bsasm_files:
@@ -55,7 +56,7 @@ c_names = [f.name for f in c_files]
 video_c = read(MAIN / "video.c")
 menu_lifecycle = video_c.split("static void video_set_menu_mode", 1)[1].split("static void menu_cycle_standard_mode", 1)[0]
 
-check("production receiver and dedicated menu/auto-lab modules", set(c_names) == {"main.c", "bs_relative_worker_probe.c", "bs_relative_middle_probe.c", "bs_addctia_probe.c", "phy_phase_tap_probe.c", "arc_phy.c", "arc_v3_controller.c", "arc_v5_autotune.c", "rx_auto_lab.c", "rf.c", "video.c", "direct_gain.c", "direct_gain_v2.c", "menu_raster.c"},
+check("production receiver and dedicated menu/auto-lab modules", set(c_names) == {"main.c", "bs_relative_worker_probe.c", "bs_relative_middle_probe.c", "bs_addctia_probe.c", "phy_phase_tap_probe.c", "arc_phy.c", "arc_v3_controller.c", "arc_v5_autotune.c", "rx_auto_lab.c", "rf.c", "video.c", "direct_gain.c", "direct_gain_v2.c", "direct_gain_v3.c", "menu_raster.c"},
       f"found: {c_names}")
 check("main.c present", "main.c" in c_names)
 check("rf.c present", "rf.c" in c_names)
@@ -646,7 +647,7 @@ check("only selectable and diagnostic BitScrambler programs are in CMakeLists",
       bs_srcs == ["fm.bsasm", "fm_relative_golden.bsasm", "fm_phase5_360.bsasm",
                   "bs_relative_worker_probe.bsasm", "bs_relative_middle_probe.bsasm",
                   "fm_phase5_fsm_capture.bsasm", "fm4.bsasm",
-                  "bs_addctia_probe.bsasm"], f"found: {bs_srcs}")
+                  "bs_addctia_probe.bsasm", "fm_phase8_hr_live.bsasm"], f"found: {bs_srcs}")
 
 # Phase5-360 architecture and simulator validation
 TOOLS_DIR = ROOT / "tools"
@@ -687,6 +688,15 @@ check("Direct Gain V2 protects fresh IQ and clean zero-write lock",
 check("Direct Gain V2 learns exact physical edges",
       'e->from == from && e->to == to' in direct_gain_v2_c and
       'e->count >= 3' in direct_gain_v2_c)
+import gen_phase8_gain_lut
+check("Direct Gain V3 uses the generated centered-cell Phase8 LUT",
+      read(MAIN / "phase8_gain_lut.h") == gen_phase8_gain_lut.build() and
+      'c5vrx_phase8_gain_lut' in video_c)
+check("Direct Gain V3 is the sole experimental automatic gain writer",
+      'direct_gain_v3_observer_task' in video_c and
+      'direct_gain_v3_tick(&s_direct_gain_v3' in video_c and
+      'direct_gain_v3_sync_applied(&s_direct_gain_v3' in video_c and
+      'V3 is the sole actuator in this experimental build.' in video_c)
 check("RSSI probe owns every AGC/BW/AFC write during its measurement",
       "s_rssi_probe_active = true;" in video_c and
       "if (s_rssi_probe_active) continue;" in video_c and
