@@ -51,3 +51,11 @@ menu "C5VRX experimental video demodulators"
             two-bundle Counter-A relative-mux oracle. Intended for live
             equivalence testing; no winding correction is performed.
 endmenu
+
+config C5VRX_DIRECT_GAIN_V3_EXPERIMENT
+    bool "Run predictive Direct Gain V3 on the default automatic RX profile"
+    default y
+    help
+        Experimental issue #107 build. The existing live demodulator stays
+        selected, while V3 alone owns automatic RF gain on the default
+        profile. Hardware gain and video validation is required before merge.
