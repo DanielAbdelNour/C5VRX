@@ -143,6 +143,7 @@ static volatile int64_t s_last_user_lag_mark_us;
 BITSCRAMBLER_PROGRAM(s_fm_program, "fm");
 BITSCRAMBLER_PROGRAM(s_fm_relative_golden_program, "fm_relative_golden");
 BITSCRAMBLER_PROGRAM(s_fm_phase5_360_program, "fm_phase5_360");
+BITSCRAMBLER_PROGRAM(s_fm_phase8_hr_live_program, "fm_phase8_hr_live");
 BITSCRAMBLER_PROGRAM(s_fm_fsm_capture_program, "fm_phase5_fsm_capture");
 BITSCRAMBLER_PROGRAM(s_fm4_program, "fm4");
 
@@ -1202,6 +1203,9 @@ static const char *output_mode_name(void)
 
 static const char *demod_mode_name(void)
 {
+#if CONFIG_C5VRX_PHASE8_HR_LIVE_TEST
+    return "PHASE8 HR TEST";
+#endif
     return "GOLDEN";
 }
 
@@ -3572,6 +3576,12 @@ static void quiet_tx_interrupts(void)
 static void start_flight_demodulator(void)
 {
     ESP_ERROR_CHECK(bitscrambler_enable(s_flight_bs));
+#if CONFIG_C5VRX_PHASE8_HR_LIVE_TEST
+    ESP_ERROR_CHECK(s_output_mode == VIDEO_OUTPUT_6BIT_40 ?
+                    ESP_OK : ESP_ERR_INVALID_STATE);
+    ESP_ERROR_CHECK(bitscrambler_load_program(s_flight_bs,
+                                             s_fm_phase8_hr_live_program));
+#else
     if (s_output_mode == VIDEO_OUTPUT_4BIT_80) {
         ESP_ERROR_CHECK(bitscrambler_load_program(s_flight_bs, s_fm4_program));
     } else {
@@ -3586,6 +3596,7 @@ static void start_flight_demodulator(void)
                                                 s_fm_fsm_capture_program));
 #endif
     }
+#endif
     ESP_ERROR_CHECK(bitscrambler_reset(s_flight_bs));
     ESP_ERROR_CHECK(bitscrambler_start(s_flight_bs));
 }
@@ -3953,7 +3964,9 @@ static void open_recovery_menu(void)
     s_menu_timeout_ticks = 0;
     settings_save();
     video_set_menu_mode(true);
-#if CONFIG_C5VRX_DIRECT_GAIN_V3_EXPERIMENT
+#if CONFIG_C5VRX_PHASE8_HR_LIVE_TEST && CONFIG_C5VRX_DIRECT_GAIN_V3_EXPERIMENT
+    printf("[RECOVERY] PHASE8 HR TEST + 6BIT@40 + DIRECT GAIN V3 TEST restored; menu %s\n",
+#elif CONFIG_C5VRX_DIRECT_GAIN_V3_EXPERIMENT
     printf("[RECOVERY] GOLDEN + 6BIT@40 + DIRECT GAIN V3 TEST restored; menu %s\n",
 #else
     printf("[RECOVERY] GOLDEN + 6BIT@40 + DIRECT GAIN V2 restored; menu %s\n",
@@ -4016,11 +4029,15 @@ static void handle_button_long_click(void)
             settings_save();
             break;
         case 4: /* VIDEO OUTPUT */
+#if CONFIG_C5VRX_PHASE8_HR_LIVE_TEST
+            printf("[MENU: OUTPUT] 6BIT@40 fixed for PHASE8 HR TEST\n");
+#else
             s_output_mode = s_output_mode == VIDEO_OUTPUT_6BIT_40 ?
                             VIDEO_OUTPUT_4BIT_80 : VIDEO_OUTPUT_6BIT_40;
             printf("[MENU: OUTPUT] -> %s%s\n", output_mode_name(),
                    s_output_mode == VIDEO_OUTPUT_4BIT_80 ? " (EXPERIMENTAL)" : "");
             settings_save();
+#endif
             break;
         case 5: /* SAVE & EXIT */
             settings_save();
@@ -5229,6 +5246,9 @@ esp_err_t video_start(void)
     if (!s_menu_commands) return ESP_ERR_NO_MEM;
 
     settings_load();
+#if CONFIG_C5VRX_PHASE8_HR_LIVE_TEST
+    s_output_mode = VIDEO_OUTPUT_6BIT_40;
+#endif
     apply_rx_profile(s_rx_profile);
 
     /* Zero the ring before starting. Flush to DMA-visible SRAM. */

@@ -35,6 +35,13 @@ menu "C5VRX diagnostic probes"
 endmenu
 
 menu "C5VRX experimental video demodulators"
+    config C5VRX_PHASE8_HR_LIVE_TEST
+        bool "Run lower-swing Phase8-HR on live 6BIT@40 video"
+        default y
+        help
+            Experimental Phase8-HR plus Direct Gain V3 A/B build.
+            Forces 6BIT@40 output. Large phase deltas may wrap.
+
     config C5VRX_PHASE5_360_LIVE
         bool "Use Phase5-360 research program (Golden DAC output only)"
         default y
