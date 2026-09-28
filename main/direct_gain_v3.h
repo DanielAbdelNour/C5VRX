@@ -21,7 +21,7 @@ typedef enum {
 } dg3_transition_t;
 
 typedef struct {
-    uint8_t p50, p95;
+    uint8_t p50, p90, p95;
     uint16_t origin_pm, clip_pm;
     uint8_t coherence;
     uint64_t observed_us;
@@ -32,13 +32,17 @@ typedef struct {
     arc_gain_tuple_t tuple[DG3_STATES];
     uint16_t relative_power_q10[DG3_STATES];
     uint16_t tuple_settle_us[DG3_STATES];
+    uint16_t uncertainty_pm[DG3_STATES];
     uint16_t artifact_score[DG3_STATES];
     uint8_t confidence[DG3_STATES];
     uint8_t bad_state[DG3_STATES];
     uint16_t settle_us[3];
+    /* Continuous requested gain relative to the current physical tuple. */
+    int32_t virtual_gain_q8;
     uint8_t current_gain, target_gain, survival_gain;
     uint8_t prior_gain, corrections;
     uint8_t high_windows, weak_windows;
+    uint8_t last_direction;
     dg3_transition_t transition;
     dg3_state_t state;
     dg3_observation_t before, before_previous, previous, last_tracking;

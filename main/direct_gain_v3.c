@@ -1,4 +1,5 @@
 #include "direct_gain_v3.h"
+#include "direct_gain_v3_lut.h"
 
 #include <string.h>
 
@@ -55,14 +56,19 @@ dg3_observation_t direct_gain_v3_measure(const uint8_t *samples, size_t bytes,
         prior_phase = phase;
     }
     unsigned cumulative = 0;
-    bool found_p50 = false;
+    bool found_p50 = false, found_p90 = false;
     unsigned p50_rank = (unsigned)((bytes + 1u) / 2u);
+    unsigned p90_rank = (unsigned)((bytes * 90u + 99u) / 100u);
     unsigned p95_rank = (unsigned)((bytes * 95u + 99u) / 100u);
     for (unsigned p = 0; p < 114u; ++p) {
         cumulative += hist[p];
         if (!found_p50 && cumulative >= p50_rank) {
             result.p50 = (uint8_t)p;
             found_p50 = true;
+        }
+        if (!found_p90 && cumulative >= p90_rank) {
+            result.p90 = (uint8_t)p;
+            found_p90 = true;
         }
         if (cumulative >= p95_rank) { result.p95 = (uint8_t)p; break; }
     }
@@ -98,6 +104,32 @@ static bool valid_learning(const dg3_observation_t *o)
            o->p95 < 80 && o->clip_pm < 20 && o->origin_pm < 300;
 }
 
+static int power_db_q8(unsigned power)
+{
+    if (power < 1u) power = 1u;
+    if (power > 113u) power = 113u;
+    return s_dg3_power_db_q8[power];
+}
+
+/* Convert a Q10 power ratio to Q8 dB using an integer log2 iteration. */
+static int ratio_db_q8(int ratio_q10)
+{
+    if (ratio_q10 < 1) ratio_q10 = 1;
+    int64_t x = ((int64_t)ratio_q10 << 16) / 1024;
+    int whole = 0;
+    while (x < 65536) { x <<= 1; --whole; }
+    while (x >= 131072) { x >>= 1; ++whole; }
+    int fraction = 0;
+    for (int bit = 7; bit >= 0; --bit) {
+        x = (x * x) >> 16;
+        if (x >= 131072) {
+            x >>= 1;
+            fraction |= 1 << bit;
+        }
+    }
+    return ((whole * 256 + fraction) * 771 + 128) / 256;
+}
+
 void direct_gain_v3_reset(direct_gain_v3_t *v3, const arc_gain_table_t *table,
                           uint8_t current_gain, uint8_t survival_gain)
 {
@@ -114,6 +146,7 @@ void direct_gain_v3_reset(direct_gain_v3_t *v3, const arc_gain_table_t *table,
     v3->survival_gain = (uint8_t)clamp_i(survival_gain, 20, v3->table.max_index);
     v3->relative_power_q10[v3->current_gain] = 1024u;
     v3->confidence[v3->current_gain] = 1u;
+    v3->uncertainty_pm[v3->current_gain] = 50u;
     v3->state = DG3_ACQUIRE;
 }
 
@@ -129,7 +162,8 @@ static bool predict(const direct_gain_v3_t *v3, uint8_t candidate,
         if (!base) return false;
         *ratio_q10 = clamp_i((int)v3->relative_power_q10[candidate] * 1024 / base,
                              1, 8192);
-        *uncertainty_pm = v3->confidence[candidate] >= 3u ? 100 : 250;
+        *uncertainty_pm = clamp_i(v3->uncertainty_pm[candidate] +
+                                  v3->uncertainty_pm[current], 80, 900);
         return true;
     }
     if (transition_kind(v3, current, candidate) != DG3_FINE) return false;
@@ -216,10 +250,11 @@ static uint8_t emergency_drop(const direct_gain_v3_t *v3)
 }
 
 static uint8_t select_destination(const direct_gain_v3_t *v3,
-                                  const dg3_observation_t *o, bool up)
+                                  const dg3_observation_t *o, bool up,
+                                  int32_t desired_q8)
 {
     uint8_t best = v3->current_gain;
-    int best_class = 4, best_p = 999, best_uncertainty = 999;
+    int best_class = 4, best_error = 99999, best_uncertainty = 999;
     int best_artifact = 999;
     for (unsigned g = 20u; g <= v3->table.max_index; ++g) {
         if (g == v3->current_gain) continue;
@@ -232,15 +267,22 @@ static uint8_t select_destination(const direct_gain_v3_t *v3,
         if (up && ratio <= 1024) continue;
         if (!up && ratio >= 1024) continue;
         int kind = transition_kind(v3, v3->current_gain, (uint8_t)g);
+        int delta_q8 = ratio_db_q8(ratio);
+        int hysteresis_q8 = kind == DG3_FINE ? 90 :
+                            kind == DG3_BB ? 192 : 384;
+        if ((up && desired_q8 < delta_q8 + hysteresis_q8) ||
+            (!up && desired_q8 > delta_q8 - hysteresis_q8)) continue;
+        int error = abs_i((int)desired_q8 - delta_q8);
         int artifact = v3->artifact_score[g];
-        if (kind < best_class || (kind == best_class && p50 < best_p) ||
-            (kind == best_class && p50 == best_p &&
+        if (kind < best_class ||
+            (kind == best_class && error < best_error) ||
+            (kind == best_class && error == best_error &&
              uncertainty < best_uncertainty) ||
-            (kind == best_class && p50 == best_p &&
+            (kind == best_class && error == best_error &&
              uncertainty == best_uncertainty && artifact < best_artifact)) {
             best = (uint8_t)g;
             best_class = kind;
-            best_p = p50;
+            best_error = error;
             best_uncertainty = uncertainty;
             best_artifact = artifact;
         }
@@ -273,9 +315,23 @@ static void learn_transition(direct_gain_v3_t *v3,
     }
     uint32_t estimate = base * after->p50 / v3->before.p50;
     estimate = (uint32_t)clamp_i((int)estimate, 1, 65535);
-    if (!v3->confidence[b]) v3->relative_power_q10[b] = (uint16_t)estimate;
-    else v3->relative_power_q10[b] = (uint16_t)
-        ((3u * v3->relative_power_q10[b] + estimate) / 4u);
+    if (!v3->confidence[b]) {
+        v3->relative_power_q10[b] = (uint16_t)estimate;
+        v3->uncertainty_pm[b] = 350u;
+    } else {
+        uint32_t old = v3->relative_power_q10[b];
+        uint32_t residual_pm = old ?
+            (uint32_t)(abs_i((int)old - (int)estimate) * 1000) / old :
+            1000u;
+        v3->uncertainty_pm[b] = (uint16_t)clamp_i(
+            (3 * (int)v3->uncertainty_pm[b] + (int)residual_pm) / 4,
+            60, 900);
+        if (residual_pm > 450u) {
+            if (v3->confidence[b] > 0u) --v3->confidence[b];
+            return;
+        }
+        v3->relative_power_q10[b] = (uint16_t)((3u * old + estimate) / 4u);
+    }
     if (v3->confidence[b] < 15u) ++v3->confidence[b];
     ++v3->learned;
 }
@@ -285,6 +341,13 @@ static uint8_t start_write(direct_gain_v3_t *v3,
                            const dg3_observation_t *prior, uint8_t target)
 {
     if (target == v3->current_gain) return target;
+    int ratio_q10 = 0, uncertainty_pm = 0;
+    if (predict(v3, target, &ratio_q10, &uncertainty_pm))
+        v3->virtual_gain_q8 -= ratio_db_q8(ratio_q10);
+    else
+        v3->virtual_gain_q8 = 0;
+    v3->virtual_gain_q8 = clamp_i(v3->virtual_gain_q8,
+                                  -12 * 256, 12 * 256);
     v3->before = *o;
     v3->before_previous = *prior;
     v3->prior_gain = v3->current_gain;
@@ -310,14 +373,18 @@ uint8_t direct_gain_v3_tick(direct_gain_v3_t *v3,
         v3->state = DG3_ACQUIRE;
         v3->stable_windows = 0;
         v3->high_windows = v3->weak_windows = 0;
+        v3->virtual_gain_q8 = 0;
+        v3->last_direction = 0;
         return start_write(v3, o, &prior, v3->survival_gain);
     }
     if (v3->state == DG3_SETTLE) {
-        /* A copied completed descriptor can still predate the PHY write.
-         * The 300 us guard is a sample-freshness bound, not an analog settle
-         * guess. Settling itself requires repeated stable new observations. */
+        /* The freshness guard grows from prior settle measurements. The
+         * signal still has to pass the multi-window stability check below. */
+        uint64_t minimum_guard = v3->settle_us[v3->transition] > 400u ?
+            (uint64_t)v3->settle_us[v3->transition] * 3u / 4u : 300u;
         if (o->observed_us <= v3->write_us ||
-            o->observed_us - v3->write_us < 300u) return v3->current_gain;
+            o->observed_us - v3->write_us < minimum_guard)
+            return v3->current_gain;
         if (v3->stable_windows &&
             abs_i((int)o->p50 - (int)v3->previous.p50) <= 2 &&
             abs_i((int)o->p95 - (int)v3->previous.p95) <= 4 &&
@@ -356,12 +423,15 @@ uint8_t direct_gain_v3_tick(direct_gain_v3_t *v3,
     if (saturated) {
         ++v3->overloads;
         v3->high_windows = v3->weak_windows = 0;
+        v3->virtual_gain_q8 = 0;
         return start_write(v3, o, &prior, emergency_drop(v3));
     }
     if (healthy(o)) {
         v3->state = DG3_HOLD;
         v3->corrections = 0;
         v3->high_windows = v3->weak_windows = 0;
+        v3->virtual_gain_q8 = 0;
+        v3->last_direction = 0;
         ++v3->holds;
         return v3->current_gain;
     }
@@ -369,23 +439,49 @@ uint8_t direct_gain_v3_tick(direct_gain_v3_t *v3,
         v3->state = DG3_ACQUIRE;
         return v3->current_gain;
     }
-    bool high = o->p50 > 32 || o->p95 > 65 || o->clip_pm >= 20;
-    bool weak = o->p50 < 13 && carrier(o) &&
-                (o->origin_pm >= 50 || o->p50 <= 8);
+    bool high = o->p50 >= 35 || o->p90 >= 53 || o->p95 > 72 ||
+                o->clip_pm >= 20;
+    bool weak = o->p50 <= 11 && carrier(o);
+    /* Schmitt bands retain the previous direction through small envelope
+     * fluctuations; they release only after crossing the inner boundary. */
+    if (v3->last_direction == 2 &&
+        (o->p50 > 30 || o->p90 > 47 || o->p95 > 65)) high = true;
+    if (v3->last_direction == 1 && o->p50 < 14 && carrier(o)) weak = true;
     if (high) {
         v3->weak_windows = 0;
+        v3->last_direction = 2;
         if (v3->high_windows < 255u) ++v3->high_windows;
     } else if (weak) {
         v3->high_windows = 0;
+        v3->last_direction = 1;
         if (v3->weak_windows < 255u) ++v3->weak_windows;
     } else {
         v3->high_windows = v3->weak_windows = 0;
+        v3->last_direction = 0;
         return v3->current_gain;
     }
     if (v3->state != DG3_VERIFY &&
         ((high && v3->high_windows < 2u) ||
          (weak && v3->weak_windows < 4u))) return v3->current_gain;
-    uint8_t target = select_destination(v3, o, weak);
+    int target_power = weak ? 17 : 27;
+    int error_q8 = power_db_q8((unsigned)target_power) -
+                   power_db_q8(o->p50);
+    if (abs_i(error_q8) >= 3 * 256) {
+        /* Predictive path: one large, unsaturated signal change can request
+         * its full relative correction immediately. */
+        v3->virtual_gain_q8 = error_q8;
+    } else if (weak) {
+        /* Release toward more gain slowly to avoid following fading noise. */
+        v3->virtual_gain_q8 += error_q8 / 4;
+    } else {
+        /* Overload attack is faster than gain-up, while saturation already
+         * takes the immediate emergency path above. */
+        v3->virtual_gain_q8 += error_q8 * 3 / 4;
+    }
+    v3->virtual_gain_q8 = clamp_i(v3->virtual_gain_q8,
+                                  -12 * 256, 12 * 256);
+    uint8_t target = select_destination(v3, o, weak,
+                                        v3->virtual_gain_q8);
     if (target == v3->current_gain) return target;
     if (v3->state == DG3_VERIFY &&
         transition_kind(v3, v3->current_gain, target) != DG3_FINE) {

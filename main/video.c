@@ -277,8 +277,13 @@ static direct_gain_controller_t s_direct_gain_controller;
 static direct_gain_v2_t s_direct_gain_v2;
 #if CONFIG_C5VRX_DIRECT_GAIN_V3_EXPERIMENT
 static direct_gain_v3_t s_direct_gain_v3;
-static volatile int s_v3_p50, s_v3_p95, s_v3_origin_pm;
+static volatile int s_v3_p50, s_v3_p90, s_v3_p95, s_v3_origin_pm;
 static volatile int s_v3_clip_pm, s_v3_coherence;
+static TaskHandle_t s_v3_observer_task_handle;
+static TaskHandle_t s_v3_sentinel_task_handle;
+static esp_timer_handle_t s_v3_sentinel_timer;
+static volatile uint32_t s_v3_fast_overload_state;
+static dg3_observation_t s_v3_fast_overload_observation;
 #endif
 static volatile uint32_t s_gain_transition_count = 0;
 static volatile uint32_t s_direct_gain_v2_write_seq;
@@ -1457,6 +1462,87 @@ static void direct_gain_v2_fast_tick(const control_metrics_t *metrics,
 }
 
 #if CONFIG_C5VRX_DIRECT_GAIN_V3_EXPERIMENT
+static void direct_gain_v3_apply_target(uint8_t target, uint32_t profile)
+{
+    if (profile != s_profile_generation ||
+        s_agc_mode != ANALOG_AGC_ACTIVE ||
+        s_rx_profile != RX_PROFILE_DIRECT_GAIN) return;
+    s_shadow_gain = target;
+    s_agc_state = s_direct_gain_v3.state == DG3_HOLD ?
+                  AGC_STATE_TRACK : AGC_STATE_LEARN;
+    s_last_direct_gain_state = s_direct_gain_v3.state == DG3_HOLD ?
+                               DIRECT_GAIN_HOLD : DIRECT_GAIN_SEEK;
+    s_last_direct_gain_target = target;
+    s_last_direct_gain_delta = (int)target - (int)s_current_gain;
+    s_last_direct_gain_total_writes = s_direct_gain_v3.writes;
+    s_last_direct_gain_hold_cycles = s_direct_gain_v3.holds;
+    if (target != s_current_gain) {
+        ++s_direct_gain_v2_write_seq;
+        __sync_synchronize();
+        uint8_t applied = apply_rx_gain_tracked(target);
+        direct_gain_v3_sync_applied(&s_direct_gain_v3, applied,
+                                    (uint64_t)esp_timer_get_time());
+        __sync_synchronize();
+        ++s_direct_gain_v2_write_seq;
+    }
+}
+
+/* ESP timer callback does no DMA or sample processing. It only wakes the
+ * sentinel task every 500 us; the sentinel requests full control work only
+ * when a fresh sample block shows a clipped Q4 envelope. */
+static void direct_gain_v3_sentinel_timer_cb(void *arg)
+{
+    (void)arg;
+    if (s_v3_sentinel_task_handle)
+        xTaskNotifyGive(s_v3_sentinel_task_handle);
+}
+
+static void direct_gain_v3_sentinel_task(void *arg)
+{
+    (void)arg;
+    uint8_t sample[64];
+    for (;;) {
+        (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        bool active = s_rx_profile == RX_PROFILE_DIRECT_GAIN &&
+                      s_agc_mode == ANALOG_AGC_ACTIVE && !s_menu_active &&
+                      !s_gain_sweep.active && !s_pre_q4_probe_active &&
+                      !s_rssi_probe_active;
+        if (!active || s_v3_fast_overload_state != 0u ||
+            s_rx_dma_ch < 0 || s_rx_dma_ch >= 3 || s_rx_dscr_count < 2)
+            continue;
+
+        uint32_t gain_epoch = s_gain_transition_count;
+        uint32_t active_addr = AHB_DMA.channel[s_rx_dma_ch].in.in_dscr_bf0.val;
+        int active_idx = find_dscr_index(s_rx_dscr_nodes, s_rx_dscr_count,
+                                         active_addr);
+        if (active_idx < 0) continue;
+        int sample_idx = (active_idx - 1 + s_rx_dscr_count) % s_rx_dscr_count;
+        uint8_t *src = s_rx_dscr_nodes[sample_idx].buffer;
+        const size_t offset = 1984u;
+        if (!src || s_rx_dscr_nodes[sample_idx].length < 4092u ||
+            src < s_raw_ring || src + offset + sizeof(sample) >
+                                  s_raw_ring + sizeof(s_raw_ring)) continue;
+        sync_dma_m2c(src + offset, sizeof(sample));
+        memcpy(sample, src + offset, sizeof(sample));
+        active_addr = AHB_DMA.channel[s_rx_dma_ch].in.in_dscr_bf0.val;
+        if (find_dscr_index(s_rx_dscr_nodes, s_rx_dscr_count,
+                            active_addr) == sample_idx ||
+            gain_epoch != s_gain_transition_count) continue;
+
+        dg3_observation_t observation = direct_gain_v3_measure(
+            sample, sizeof(sample), c5vrx_phase8_gain_lut,
+            (uint64_t)esp_timer_get_time());
+        if (observation.clip_pm < 125u && observation.p95 < 95u) continue;
+        if (!__sync_bool_compare_and_swap(&s_v3_fast_overload_state, 0u, 1u))
+            continue;
+        s_v3_fast_overload_observation = observation;
+        __sync_synchronize();
+        __sync_lock_test_and_set(&s_v3_fast_overload_state, 2u);
+        if (s_v3_observer_task_handle)
+            xTaskNotifyGive(s_v3_observer_task_handle);
+    }
+}
+
 /* Observe four separated 64-byte regions in the latest completed descriptor.
  * This task never touches a descriptor still owned by the RX DMA engine and
  * never participates in the 40 MS/s video clock. Only this task writes gain. */
@@ -1468,12 +1554,16 @@ static void direct_gain_v3_observer_task(void *arg)
     uint32_t seen_profile = UINT32_MAX, seen_arc = UINT32_MAX;
     bool was_active = false;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(1));
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1));
         bool active = s_rx_profile == RX_PROFILE_DIRECT_GAIN &&
                       s_agc_mode == ANALOG_AGC_ACTIVE && !s_menu_active &&
                       !s_gain_sweep.active && !s_pre_q4_probe_active &&
                       !s_rssi_probe_active;
-        if (!active) { was_active = false; continue; }
+        if (!active) {
+            was_active = false;
+            (void)__sync_lock_test_and_set(&s_v3_fast_overload_state, 0u);
+            continue;
+        }
         uint32_t profile = s_profile_generation;
         uint32_t arc = rf_get_arc_generation();
         if (!was_active || profile != seen_profile || arc != seen_arc ||
@@ -1483,6 +1573,16 @@ static void direct_gain_v3_observer_task(void *arg)
             seen_profile = profile;
             seen_arc = arc;
             was_active = true;
+        }
+
+        if (__sync_bool_compare_and_swap(&s_v3_fast_overload_state, 2u, 1u)) {
+            __sync_synchronize();
+            dg3_observation_t overload = s_v3_fast_overload_observation;
+            __sync_lock_release(&s_v3_fast_overload_state);
+            uint8_t emergency = direct_gain_v3_tick(&s_direct_gain_v3,
+                                                    &overload);
+            direct_gain_v3_apply_target(emergency, profile);
+            continue;
         }
 
         uint32_t gain_epoch = s_gain_transition_count;
@@ -1511,32 +1611,13 @@ static void direct_gain_v3_observer_task(void *arg)
             sample, sizeof(sample), c5vrx_phase8_gain_lut,
             (uint64_t)esp_timer_get_time());
         s_v3_p50 = observation.p50;
+        s_v3_p90 = observation.p90;
         s_v3_p95 = observation.p95;
         s_v3_origin_pm = observation.origin_pm;
         s_v3_clip_pm = observation.clip_pm;
         s_v3_coherence = observation.coherence;
         uint8_t target = direct_gain_v3_tick(&s_direct_gain_v3, &observation);
-        if (profile != s_profile_generation ||
-            s_agc_mode != ANALOG_AGC_ACTIVE ||
-            s_rx_profile != RX_PROFILE_DIRECT_GAIN) continue;
-        s_shadow_gain = target;
-        s_agc_state = s_direct_gain_v3.state == DG3_HOLD ?
-                      AGC_STATE_TRACK : AGC_STATE_LEARN;
-        s_last_direct_gain_state = s_direct_gain_v3.state == DG3_HOLD ?
-                                   DIRECT_GAIN_HOLD : DIRECT_GAIN_SEEK;
-        s_last_direct_gain_target = target;
-        s_last_direct_gain_delta = (int)target - (int)s_current_gain;
-        s_last_direct_gain_total_writes = s_direct_gain_v3.writes;
-        s_last_direct_gain_hold_cycles = s_direct_gain_v3.holds;
-        if (target != s_current_gain) {
-            ++s_direct_gain_v2_write_seq;
-            __sync_synchronize();
-            uint8_t applied = apply_rx_gain_tracked(target);
-            direct_gain_v3_sync_applied(&s_direct_gain_v3, applied,
-                                        (uint64_t)esp_timer_get_time());
-            __sync_synchronize();
-            ++s_direct_gain_v2_write_seq;
-        }
+        direct_gain_v3_apply_target(target, profile);
     }
 }
 #endif
@@ -1851,11 +1932,13 @@ static void lab_print_row(const char *kind, const hw_transport_counters_t *base)
            gain_age_ms, phy_age_ms, (unsigned)s_last_phy_write_kind,
            transport_age_ms, (unsigned long)s_last_transport_flags);
 #if CONFIG_C5VRX_DIRECT_GAIN_V3_EXPERIMENT
-    printf("DG3_OBS p50=%d p95=%d origin_pm=%d clip_pm=%d coherence=%d "
-           "state=%u gain=%u writes=%lu holds=%lu verified=%lu learned=%lu "
+    printf("DG3_OBS p50=%d p90=%d p95=%d origin_pm=%d clip_pm=%d coherence=%d "
+           "state=%u gain=%u virtual_q8=%ld writes=%lu holds=%lu verified=%lu learned=%lu "
            "settle_fine_us=%u settle_bb_us=%u settle_rf_us=%u\n",
-           s_v3_p50, s_v3_p95, s_v3_origin_pm, s_v3_clip_pm, s_v3_coherence,
+           s_v3_p50, s_v3_p90, s_v3_p95, s_v3_origin_pm, s_v3_clip_pm,
+           s_v3_coherence,
            (unsigned)s_direct_gain_v3.state, s_current_gain,
+           (long)s_direct_gain_v3.virtual_gain_q8,
            (unsigned long)s_direct_gain_v3.writes,
            (unsigned long)s_direct_gain_v3.holds,
            (unsigned long)s_direct_gain_v3.verified,
@@ -5315,7 +5398,23 @@ esp_err_t video_start(void)
     /* Distributed shadow observer: read-only, no PHY writes and no DMA pacing. */
     xTaskCreate(fusion_observer_task, "fusion_obs", 4096, NULL, 2, NULL);
 #if CONFIG_C5VRX_DIRECT_GAIN_V3_EXPERIMENT
-    xTaskCreate(direct_gain_v3_observer_task, "gain_v3_obs", 4096, NULL, 2, NULL);
+    ESP_ERROR_CHECK(xTaskCreate(direct_gain_v3_observer_task, "gain_v3_obs",
+                                4096, NULL, 3,
+                                &s_v3_observer_task_handle) == pdPASS ?
+                    ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(xTaskCreate(direct_gain_v3_sentinel_task, "gain_v3_fast",
+                                3072, NULL, 4,
+                                &s_v3_sentinel_task_handle) == pdPASS ?
+                    ESP_OK : ESP_ERR_NO_MEM);
+    const esp_timer_create_args_t v3_timer_args = {
+        .callback = direct_gain_v3_sentinel_timer_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "dg3_fast",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&v3_timer_args,
+                                     &s_v3_sentinel_timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(s_v3_sentinel_timer, 500));
 #endif
 
     /* Start interactive console for on-demand diagnostics (zero periodic CPU/bus traffic) */
