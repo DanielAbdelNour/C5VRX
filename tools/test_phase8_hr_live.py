@@ -43,8 +43,10 @@ def main():
             linear += 1
             assert code == value // 4
     assert linear + negative_wrap + positive_wrap == 65536
-    assert ((BIAS + MULT * -32) & 255) >> 2 == 3
-    assert ((BIAS + MULT * 88) & 255) >> 2 == 63
+    assert ((BIAS + MULT * -128) & 255) >> 2 == 0
+    assert ((BIAS + MULT * 127) & 255) >> 2 == 63
+    assert ((BIAS + MULT * -32) & 255) >> 2 == 24
+    assert ((BIAS + MULT * 88) & 255) >> 2 == 54
     print(f"Phase8-HR live: all 65,536 raw pairs, 8 slots, 2 bundles/pair, "
           f"duplicated DAC PASS; linear={linear}, negative_wrap={negative_wrap}, "
           f"positive_wrap={positive_wrap}, used_DAC_codes={sum(bool(n) for n in counts)}")

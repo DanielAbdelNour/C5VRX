@@ -1,10 +1,17 @@
 # Direct Gain V3, issue #109
 
-This experimental build pairs the Phase8-HR live demodulator with a hybrid
+This experimental build pairs the full-range adjacent Phase8 demodulator with a hybrid
 Q4 gain controller. Q4 envelope and Phase8 coherence provide the receiver's
 feedback; PHY RSSI and antenna calibration are not used to choose gain.
 
 ## Control path
+
+The Phase8 endpoint difference is mapped as `128 + signed_delta`, then
+quantized to six bits. This covers the complete signed delta range -128..+127
+without the former early arithmetic wrap at -38/+89. The slope is one half of
+the earlier `76 + 2*delta` experiment. A true phase step across +/-180 degrees
+still aliases at the signed-delta boundary, and low-amplitude phase estimates
+can still be noisy; this mapping only removes the artificial early wrap.
 
 The 1 ms observer reads four separated 64-byte regions from the most recently
 completed RX descriptor. It computes centered P50, P90 and P95, origin and

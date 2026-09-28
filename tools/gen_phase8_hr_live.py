@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate issue #103's lower-swing live Phase8 endpoint experiment."""
+"""Generate a full signed-range adjacent Phase8 live demodulator."""
 
 from pathlib import Path
 import re
@@ -9,8 +9,8 @@ from gen_phase8_hr import build as build_oracle, phase8
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "main/fm_phase8_hr_live.bsasm"
-BIAS = 76
-MULT = 2
+BIAS = 128
+MULT = 1
 
 
 def build() -> str:
@@ -26,10 +26,10 @@ def build() -> str:
             words.append(minus | (plus << 8))
     source = source[:match.start()] + "lut " + " ".join(map(str, words)) + source[match.end():]
     source = source.replace("# Phase8-HR arithmetic oracle only: unsafe large-delta wrap.",
-                            "# Issue #103 live Phase8-HR lower-swing test; large deltas can still wrap.")
+                            "# Full signed Phase8 delta mapped across all 64 DAC levels.")
     source = source.replace("cfg trailing_bytes 10", "cfg trailing_bytes 0")
     source = source.replace("80 + 3*(current-previous)",
-                            "76 + 2*(current-previous)")
+                            "128 + (current-previous)")
     return source
 
 
