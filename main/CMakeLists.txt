@@ -12,6 +12,7 @@ idf_component_register(
         "rf.c"
         "video.c"
         "direct_gain.c"
+        "direct_gain_v2.c"
         "menu_raster.c"
     INCLUDE_DIRS "."
     REQUIRES
@@ -42,5 +43,4 @@ target_bitscrambler_add_src("bs_relative_worker_probe.bsasm")
 target_bitscrambler_add_src("bs_relative_middle_probe.bsasm")
 target_bitscrambler_add_src("fm_phase5_fsm_capture.bsasm")
 target_bitscrambler_add_src("fm4.bsasm")
-target_bitscrambler_add_src("fm_traj.bsasm")
 target_bitscrambler_add_src("bs_addctia_probe.bsasm")
