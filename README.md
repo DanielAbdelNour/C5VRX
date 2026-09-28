@@ -162,8 +162,8 @@ After startup, the CPU does not process pixels; the entire pipeline runs continu
 - **No bandwidth-switch transient in flight**: Weak-signal recovery is handled continuously by ARC V3 and the demodulator while RF bandwidth remains fixed.
 
 ### 4. Phase8 adjacent demodulator
-- `fm_phase8_hr_live.bsasm` uses adjacent I/Q samples at 20 MS/s and maps the full signed phase-delta range (\u2212128 through +127 bins) across the 64 DAC levels.
-- The mapping preserves direction and detail across the signed range. A phase step that crosses the \u00b1180\u00b0 representation boundary remains ambiguous and can alias.
+- `fm_phase8_hr_live.bsasm` uses adjacent I/Q samples at 20 MS/s and maps the full signed phase-delta range (−128 through +127 bins) across the 64 DAC levels.
+- The mapping preserves direction and detail across the signed range. A phase step that crosses the ±180° representation boundary remains ambiguous and can alias.
 - The live Phase8 build was checked on hardware with Direct Gain V3 and produced a clean picture with the VTX on.
 
 ### 5. Soft-Noise Squelched Squelch & Pedestal Management
