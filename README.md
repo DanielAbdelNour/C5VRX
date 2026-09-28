@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/c5vrx-logo.jpg" alt="C5VRX logo" width="760" />
+  <img src="assets/c5vrx-phase8-logo.png" alt="C5VRX Phase8 logo" width="760" />
 
   <p><strong>ESP32-C5 Analog 5.8 GHz FPV Receiver</strong></p>
   <p>From live RF to real-time analog NTSC composite video with one Seeed Studio XIAO ESP32-C5 and a passive resistor DAC.</p>
@@ -31,11 +31,12 @@
 
 The current experimental range work measures semantic CVBS sync and the exact-adjacent winding loss hidden by the 50 ns endpoint discriminator. See `docs/range-demod-quality-v2.md` for the measurement model and hardware validation rules.
 
-The default automatic gain profile is Direct Gain V2. It decodes the valid
-ESP32-C5 vendor RF/BB/Fine table, makes fast decisions from completed
-IQ snapshots and holds a clean signal without gain writes. Direct Gain
-V1 and ARC V3 remain selectable for A/B testing. See
-docs/direct-gain-v2.md for the model and hardware test limits.
+The default live configuration uses the adjacent Phase8 demodulator with
+Direct Gain V3. Phase8 maps the complete signed adjacent phase-delta range to
+the 6-bit video DAC; steps crossing the phase wrap can still alias. Direct
+Gain V3 uses centered Q4 measurements and the generated Phase8 gain map to
+adjust RF gain while holding when the signal is stable. The live hardware
+check showed a clean picture with the VTX on, high IQ coherence and no clipping.
 
 Pre-Q4 receiver characterization is documented in `docs/pre-q4-lab.md`. The
 lab can isolate TX/DAC self-noise, sweep the complete highest RF-stage portion
@@ -130,7 +131,7 @@ PARLIO RX @ 40 MS/s (POS sample edge, pure continuous hardware GDMA)
 Circular GDMA Ring (32 KiB in HP SRAM, Zero-EOF patched)
         │
         ▼
-Phase5-360 BitScrambler Demodulator (fm_phase5_360.bsasm: 360° trajectory unwrap, 20 MS/s [D,D])
+Phase8 adjacent-demod BitScrambler (fm_phase8_hr_live.bsasm: full signed delta, 20 MS/s [D,D])
         │
         ▼
 PARLIO TX @ 40 MHz ([D,D] mode -> 20 MS/s unique CVBS output)
@@ -150,24 +151,20 @@ After startup, the CPU does not process pixels; the entire pipeline runs continu
 - **The Solution**: C5VRX-3 patches `dw0.suc_eof = 0` across the descriptor ring in SRAM after driver initialization, paired with 64-byte aligned cache synchronization (`sync_dma_c2m`).
 - **The Result**: Truly gapless, infinite circular streaming with zero wrap bubbles, rock-solid vertical sync lock, and crystal-clear horizontal alignment.
 
-### 2. Direct Gain V2 (default)
-- The existing ~6 ms observer reads completed raw-IQ DMA data and is the sole gain writer for this profile. The 50 ms task retains diagnostics but makes no V2 gain decisions.
-- Each vendor gain index is decoded to an RF stage, BB code and Fine code. Normal corrections prefer a useful Fine adjustment within the current stage; hard fade or overload can jump directly to a predicted safe target in one write. All indices remain available, including single-index Fine steps.
-- A useful Q4 vector holds physical gain with zero writes. After a write, observations from the preceding 12 ms are rejected before verifying the result.
-- Exact measured from/to edges can replace the uncalibrated index prior after three valid observations. Confidence never transfers to another edge. G20 is the user-selected lower bound.
-- The tuple model and timing are a firmware candidate for hardware A/B; reduced visible switching artifacts require live confirmation. ARC V3 remains selectable for comparison.
+### 2. Direct Gain V3 (default)
+- A fast observer measures centered Q4 IQ occupancy and coherence and uses the generated Phase8 gain lookup to choose a gain target.
+- V3 is the sole automatic gain writer in this build. It holds gain when measurements are stable and rejects measurements taken during the settling interval after a write.
+- Hardware validation with the VTX on showed a clean picture, high coherence, no clipping and no transport errors.
 
 ### 3. Fixed BW40 Analog Front-End
 - **BW40 is the production RF contract**: C5VRX keeps the wide analog front-end selected with `phy_wifi_fbw_sel(1)` during startup and after every channel retune.
 - **No runtime BW20 gearbox**: Hardware testing demonstrated that narrow bandwidth rolls off part of the analog-FM video spectrum, reducing detail and causing chroma instability.
 - **No bandwidth-switch transient in flight**: Weak-signal recovery is handled continuously by ARC V3 and the demodulator while RF bandwidth remains fixed.
 
-### 4. Phase5-360 (Exact Adjacent50) Demodulator
-- **True 360° Trajectory Resolution**: Overcomes the $\pm 180^\circ$ shortest-arc wrapping limit of Golden Phase5 by evaluating the 3-sample trajectory $\Delta_0 + \Delta_1 = \text{wrap32}(M - P) + \text{wrap32}(C - M)$ without a second wrap, spanning the full $[-360^\circ \dots +337.5^\circ]$ ($-32 \dots +30$ bins) range.
-- **Algebraic Cancellation of $r_M$**: Proves mathematically and in silicon that intermediate sub-bin quantization residuals cancel 100% algebraically ($(\phi_M - \phi_P) + (\phi_C - \phi_M) = (\phi_C - \phi_P) + 2\pi k$). The middle sample $M$ acts purely as an integer winding resolver ($k \in \{-1, 0, +1\}$), requiring zero sub-bin precision.
-- **Strict Zero False Alarm Guarantee on 3.58 MHz Chroma**: For all pairs with $|\Delta| < 12$ bins (including 100% of the 3.58 MHz NTSC color subcarrier and fine detail), output is byte-identical to calibrated Golden DAC fallback. **Strictly zero rainbow artifacts or color noise!**
-- **Elimination of High-Contrast Edge Streaks**: High-contrast edges ($|\Delta| \ge 12$) that previously caused shortest-arc wrap anomalies (black streaks on white edges or white sparks on dark edges) are resolved cleanly to solid contrast rails.
-- **Zero-Collision 1024x16 LUT Partitioning**: Controller accesses address $0 \dots 255$ (`raw_C`) to extract 5-bit Phase5, while Worker accesses $(P \ll 5) \mid C$ ($0 \dots 1023$) to emit calibrated DAC output within the strict 50 ns (2-bundle) timing budget at 20 MS/s unique [D, D] output.
+### 4. Phase8 adjacent demodulator
+- `fm_phase8_hr_live.bsasm` uses adjacent I/Q samples at 20 MS/s and maps the full signed phase-delta range (\u2212128 through +127 bins) across the 64 DAC levels.
+- The mapping preserves direction and detail across the signed range. A phase step that crosses the \u00b1180\u00b0 representation boundary remains ambiguous and can alias.
+- The live Phase8 build was checked on hardware with Direct Gain V3 and produced a clean picture with the VTX on.
 
 ### 5. Soft-Noise Squelched Squelch & Pedestal Management
 - Large ambiguous phase deltas outside safe trajectory winding are mapped to blanking pedestal (DAC code 20) instead of sync tip (DAC code 0), eliminating false horizontal sync triggers and tearing during static.

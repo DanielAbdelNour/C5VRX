@@ -34,7 +34,8 @@ bsasm_files = list(MAIN.glob("*.bsasm"))
 check("BitScrambler source artifacts, including historical Trajectory, remain available",
       {f.name for f in bsasm_files} == {"fm.bsasm", "fm_relative_golden.bsasm", "fm_phase5_360.bsasm",
                                       "fm_phase5_fsm_capture.bsasm", "bs_relative_worker_probe.bsasm",
-                                      "bs_relative_middle_probe.bsasm", "bs_addctia_probe.bsasm", "fm4.bsasm", "fm_traj.bsasm"},
+                                      "bs_relative_middle_probe.bsasm", "bs_addctia_probe.bsasm", "fm4.bsasm", "fm_traj.bsasm",
+                                      "fm_phase8_hr_live.bsasm"},
       f"found {[f.name for f in bsasm_files]}")
 
 for bsasm_file in bsasm_files:
@@ -646,7 +647,7 @@ check("only selectable and diagnostic BitScrambler programs are in CMakeLists",
       bs_srcs == ["fm.bsasm", "fm_relative_golden.bsasm", "fm_phase5_360.bsasm",
                   "bs_relative_worker_probe.bsasm", "bs_relative_middle_probe.bsasm",
                   "fm_phase5_fsm_capture.bsasm", "fm4.bsasm",
-                  "bs_addctia_probe.bsasm"], f"found: {bs_srcs}")
+                  "bs_addctia_probe.bsasm", "fm_phase8_hr_live.bsasm"], f"found: {bs_srcs}")
 
 # Phase5-360 architecture and simulator validation
 TOOLS_DIR = ROOT / "tools"
