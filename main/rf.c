@@ -39,9 +39,11 @@
 /* Runtime analog filter state; startup remains BW40. */
 static bool s_analog_bw40 = true;
 
-/* Issue #117/#119 native hardware AGC experiment. Decided once per boot from
- * NVS before PHY init: the vendor AGC cannot be restored after
- * phy_disable_agc()/phy_rfagc_disable(), so it is never disabled instead. */
+/* Issue #117/#119 native hardware AGC, the default receive gain owner.
+ * Decided once per boot from NVS before PHY init: the vendor AGC cannot be
+ * restored after phy_disable_agc()/phy_rfagc_disable(), so it is never
+ * disabled instead. An explicit NVS value of 0 selects the firmware gain
+ * controllers (Direct Gain V3 et al.) as a fallback. */
 #define NATIVE_AGC_NVS_NAMESPACE "c5vrx"
 #define NATIVE_AGC_NVS_KEY       "native_agc"
 #define RX_AGC_CTRL_REG          0x600A7030u
@@ -322,12 +324,12 @@ esp_err_t rf_prepare_fresh_phy_calibration(void)
 static bool native_agc_boot_requested(void)
 {
     nvs_handle_t handle;
-    uint8_t value = 0;
+    uint8_t value = 1u;
     if (nvs_open(NATIVE_AGC_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK)
-        return false;
-    if (nvs_get_u8(handle, NATIVE_AGC_NVS_KEY, &value) != ESP_OK) value = 0;
+        return true;
+    if (nvs_get_u8(handle, NATIVE_AGC_NVS_KEY, &value) != ESP_OK) value = 1u;
     nvs_close(handle);
-    return value == 1u;
+    return value != 0u;
 }
 
 esp_err_t rf_request_native_agc_boot(bool enable)
@@ -335,9 +337,7 @@ esp_err_t rf_request_native_agc_boot(bool enable)
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NATIVE_AGC_NVS_NAMESPACE, NVS_READWRITE, &handle);
     if (err != ESP_OK) return err;
-    err = enable ? nvs_set_u8(handle, NATIVE_AGC_NVS_KEY, 1u)
-                 : nvs_erase_key(handle, NATIVE_AGC_NVS_KEY);
-    if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
+    err = nvs_set_u8(handle, NATIVE_AGC_NVS_KEY, enable ? 1u : 0u);
     if (err == ESP_OK) err = nvs_commit(handle);
     nvs_close(handle);
     return err;

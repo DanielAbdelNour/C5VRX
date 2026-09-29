@@ -2606,9 +2606,10 @@ static void lab_request_fresh_phy_calibration(void)
     esp_restart();
 }
 
-/* Issue #117/#119: native hardware AGC is a per-boot experiment because the
- * vendor loop cannot be restored after C5VRX disables it. 'N' flips the NVS
- * request and reboots; the next rf_start() decides ownership before PHY use. */
+/* Issue #117/#119: native hardware AGC is the default, chosen per boot because
+ * the vendor loop cannot be restored after C5VRX disables it. 'N' flips to the
+ * firmware gain fallback (or back) and reboots; rf_start() decides ownership
+ * before PHY use. */
 static void lab_toggle_native_agc_boot(void)
 {
     if (s_gain_sweep.active || s_menu_active || s_pre_q4_probe_active) {
@@ -5472,9 +5473,9 @@ esp_err_t video_start(void)
     if (rf_native_agc_active()) {
         rf_native_agc_state_t native;
         rf_get_native_agc_state(&native);
-        ESP_LOGW(TAG, "NATIVE HW AGC EXPERIMENT: vendor AGC never disabled, "
+        ESP_LOGW(TAG, "NATIVE HW AGC (default): vendor AGC never disabled, "
                  "firmware gain writes blocked (gain_reg=0x%08lx agc_reg=0x%08lx). "
-                 "'E' = P8ENV row, 'N' = reboot to firmware gain control",
+                 "'E' = P8ENV row, 'N' = reboot to firmware gain fallback",
                  (unsigned long)native.gain_status_reg,
                  (unsigned long)native.agc_ctrl_reg);
     }
