@@ -34,6 +34,13 @@ Gain V3 sat at gain 62 with every Q4 sample in the four origin cells. See
 [docs/phase8-range-envelope.md](docs/phase8-range-envelope.md). This is one
 walk test, not a controlled attenuation sweep.
 
+Known native-AGC issues, to be fixed next (#117 Phase 4): raw captures show
+the vendor loop stepping gain within a video line (Phase8 noise lines, dark
+colours shifting towards blue), and occasionally parking at a very low gain.
+In that state Phase8 loses sync and the screen goes white until the gain
+recovers or the receiver restarts. Close-range resolution is also lower than
+with Direct Gain V3 because the native loop targets a smaller Q4 radius.
+
 The combined build was flashed and observed with the VTX on. The operator
 reported a clean picture; USB telemetry showed 98-99% coherence, no clipping,
 and no RX/TX transport errors during that observation. This is a live hardware
@@ -147,7 +154,7 @@ The continuous pixel path runs in AHB GDMA, BitScrambler, and PARLIO TX. A backg
 
 ### 2. Gain control: native hardware AGC (default), Direct Gain V3 (fallback)
 - By default `rf_start()` never calls `phy_disable_agc()` / `phy_rfagc_disable()`, releases forced gain and FFT scale once, and refuses every firmware gain write. Espressif's AGC owns RF/BB/fine gain.
-- `N` stores the choice in NVS and reboots. The fallback below applies only after selecting firmware gain control.
+- The on-screen menu offers only native AGC (RF FRONTEND page: gain shown as `NATIVE HW AGC`; long press changes bandwidth). The firmware fallback is reachable only from the serial console: `N` stores the choice in NVS and reboots. The fallback below applies only after selecting firmware gain control.
 - The Direct Gain V3 fast observer measures centered Q4 P50/P90/P95, phase coherence, clipping, and origin occupancy from completed RX buffers.
 - V3 is the sole automatic gain writer in the default profile. It chooses physical RF/BB/Fine gain tuples and waits for settled observations after writes.
 - Healthy measurements produce a zero-write hold. A live check with the VTX on showed a clean picture and no clipping or transport errors; broader range and transition testing remains useful.
@@ -207,6 +214,7 @@ Connecting to the USB serial console (115200 baud) provides live telemetry and s
 | `D` / `I` / `Y` | Select Direct Gain V3 / Direct Gain V1 / ARC V3 profiles (firmware gain mode only) |
 | `N` | Reboot switching between native hardware AGC (default) and firmware gain control |
 | `E` | Print one `P8ENV` Q4 envelope / origin-collapse row |
+| `Q` / `T` | Raw Q4/I4 dump (4 x 64 consecutive samples) / read-only AGC register dump |
 
 ---
 

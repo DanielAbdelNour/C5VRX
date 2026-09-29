@@ -45,7 +45,30 @@ Findings:
   **not** reveal the gain the vendor loop chose. `0x600A7030` was identical in
   both modes. The Q4 radius is currently the only view of the native loop.
 
-Next: tune the native loop's target level and ceiling (#117 Phase 4, e.g.
+## Bench session 2, same day: known native-AGC defects
+
+- **Lower resolution, structured noise lines, blacks shifting to blue.** Raw
+  `Q` captures (VTX on) show each 1.6 us run is clean FM: steps are 95-100%
+  within 45 degrees, and the amplitude is flat for long stretches. But the
+  amplitude sits at a few discrete levels (radius ~0.7, 2.5, 2.9, 3.5, 5.1,
+  5.7, rail). It steps between them within 1-2 samples, often mid-run, and
+  probes ~25 us apart regularly differ. A VTX or fading cannot change
+  amplitude that fast, so the vendor loop is switching gain several times per
+  video line. Each switch plausibly shows up as a Phase8 disturbance on that
+  line. This is not the random static seen with forced firmware gain.
+- **White screen.** Captured live: the menu was closed and there were no
+  transport faults. The Q4 vector had collapsed to radius ~1.6 (80% near the
+  origin, no clipping), leaving no usable sync, so the monitor showed white.
+  It recovered by itself this time. Earlier occurrences needed a restart.
+- **The saturation-threshold registers (`0x600A7064` / `0x600A7114`) are not
+  the target-level control.** They each hold four ascending bytes
+  (20/36/53/77 and 18/30/40/46). Shifting all bytes by +4 in a reversible
+  bench A/B changed nothing measurable, so the test knob was removed.
+- DC is centred: a mean code of about -0.45 on I and Q is exactly what a
+  zero-mean signal gives, because code n represents n+0.5.
+
+Next: stop the native loop from switching gain within a line and from parking
+low (find its re-trigger / hold controls), then tune its target level and ceiling (#117 Phase 4, e.g.
 `phy_wifi_agc_sat_gain`) toward a larger Q4 radius at range, and find a
 register that exposes the native gain decision.
 

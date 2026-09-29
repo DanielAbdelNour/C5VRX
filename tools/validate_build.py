@@ -389,10 +389,11 @@ check("stored legacy gain profiles migrate to default V2",
       "settings.rx_profile == RX_PROFILE_ARC_V3_EXP" in all_c and
       "RX_PROFILE_ARC_V3_EXP : RX_PROFILE_DIRECT_GAIN" in all_c)
 
-check("RF menu preserves BW control and adds two-second profile selector",
-      "LONG:BW  2S:PROFILE" in all_c and
-      "btn_ticks >= 40" in all_c and
-      "cycle_rx_profile();" in all_c)
+check("RF menu offers only native AGC plus BW control; no on-screen profile selector",
+      '"NATIVE HW AGC"' in all_c and
+      '"LONG: BANDWIDTH"' in all_c and
+      "2S:PROFILE" not in all_c and
+      "btn_profile_fired" not in all_c)
 check("VIDEO menu has only the Golden live demodulator",
       "LONG:DAC - APPLIES ON EXIT" in all_c and
       "cycle_demod_mode();" not in all_c and

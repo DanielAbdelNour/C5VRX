@@ -14,6 +14,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 #include "driver/gpio.h"
 #include "esp_err.h"
@@ -355,6 +356,18 @@ void rf_get_native_agc_state(rf_native_agc_state_t *state)
     state->gain_status_reg = REG32(RX_GAIN_STATUS_REG);
     state->agc_ctrl_reg = REG32(RX_AGC_CTRL_REG);
     state->blocked_writes = s_native_agc_blocked_writes;
+}
+
+/* Read-only dump of the AGC register block programmed by the vendor AGC init,
+ * update and saturation-gain routines. Evidence for #117 Phase 4 tuning. */
+void rf_dump_agc_regs(void)
+{
+    printf("AGCREGS native=%u", s_native_agc ? 1u : 0u);
+    for (uint32_t addr = 0x600A7000u; addr < 0x600A7200u; addr += 4u) {
+        if ((addr & 0x1Fu) == 0u) printf("\nAGCREGS 0x%08lx:", (unsigned long)addr);
+        printf(" %08lx", (unsigned long)REG32(addr));
+    }
+    printf("\n");
 }
 
 esp_err_t rf_start(void)

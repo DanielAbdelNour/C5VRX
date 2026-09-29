@@ -97,6 +97,7 @@ typedef struct {
 } rf_native_agc_state_t;
 
 esp_err_t rf_request_native_agc_boot(bool enable);
+void rf_dump_agc_regs(void);
 bool rf_native_agc_active(void);
 void rf_get_native_agc_state(rf_native_agc_state_t *state);
 
