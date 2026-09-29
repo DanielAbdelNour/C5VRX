@@ -11,7 +11,7 @@ eight-field chain attempted one contiguous 66--76 KiB descriptor allocation
 after Wi-Fi/PHY startup. That returned `ESP_ERR_NO_MEM`; `ESP_ERROR_CHECK`
 aborted, the DAC went black during reboot, and normal VTX video then returned.
 The production raster now loops one complete two-field frame, needs at most
-1,587 descriptors (less than 20 KiB), and allocates before stopping live TX.
+1,811 descriptors (about 22 KiB), and allocates before stopping live TX.
 Allocation failure therefore leaves live video running instead of rebooting.
 
 The reported symptom was a readable menu for about one second, then inversion
@@ -113,23 +113,40 @@ framebuffer. The production UI is **384 x 56 logical pixels**:
 - horizontal coordinates use 208/50 DAC samples; the allocated UI segment is
   1600 samples / 40.0 us wide, about 10.2% wider than the previous
   1452-sample / 36.3 us geometry;
-- one logical Y row = three physical video lines (168-line UI height);
+- one logical Y row = four NTSC or five PAL video lines (224 / 280 UI lines
+  per field, ~93% / ~98% of the active picture height);
+- the UI is centred in the active picture on both axes: NTSC field-line
+  indices 29..252 of the active 21..261 at 15.7..55.7 us after 0H, PAL 28..307
+  of 25..311 at 16.3..56.3 us;
 - exact six-bit DAC shades only; no alpha, anti-aliasing or browser-style scaling;
 - persistent status bar + navigation rail + page content, rendered from the existing
   8x8 bitmap font and small built-in icons.
 
 The UI backing store is 89,600 bytes because vertical scaling reuses each
-logical row from the same SRAM buffer. Together with sync/burst/blank templates,
-`menu_raster_t` is 98,304 bytes (96 KiB). The first 400x72x4 implementation was rejected
+logical row from the same SRAM buffer; the taller 4x/5x repetition therefore
+costs no UI memory. Together with sync/burst/blank templates, `menu_raster_t`
+is 99,960 bytes. The first 400x72x4 implementation was rejected
 by the production linker because it overflowed ESP32-C5 SRAM by 39,408 bytes.
-The compact 384x56x3 layout keeps the same modern status/sidebar/page structure.
+The compact 384x56 layout keeps the same modern status/sidebar/page structure.
 The later ~10% horizontal widening adds 8,288 bytes to the UI backing store
 without increasing the DMA node count.
 
-The scatter chain still uses one UI segment per displayed scanline, so the DMA
-node count does not grow with glyph complexity. PAL needs 1,587 nodes and NTSC
-1,387. A `dma_descriptor_t` is 12 bytes on ESP32-C5, so the bounded allocation
-is 19,200 bytes.
+The UI is still only ~76% of the active line width (40.0 of ~52 us). Filling
+the full width at 40 MHz needs ~2,100 bytes per row, about 27 KB more static
+SRAM; with HP SRAM ~85% used at build time and Wi-Fi plus the transient
+descriptor chain allocated from the remainder, that was rejected. Running the
+menu TX at 20 MHz would fit a full-width row in less memory, but it reworks
+NTSC timing/burst closure, doubles sync-edge quantization, and breaks the
+6BIT@40 menu-geometry rule; it was judged not worth it for a settings screen.
+
+Horizontal centring does not add DMA nodes: the shared sync/burst prefix is
+lengthened to the UI start (628 samples NTSC, 652 PAL; 1,656 more template
+bytes than the old 448-sample prefix), so a UI scanline is still prefix + UI
+row + blank tail. The scatter chain uses one UI segment per displayed
+scanline, so the DMA node count does not grow with glyph complexity. The
+taller UI adds one node per extra UI line: PAL needs 1,811 nodes and NTSC
+1,499. A `dma_descriptor_t` is 12 bytes on ESP32-C5, so the bounded
+allocation (1,840 nodes) is 22,080 bytes.
 
 The widened 1600-byte UI rows initially pushed static `.dram0.bss` 7,488 bytes
 past the C5 linker limit. The fix is not to shrink the menu again: menu
