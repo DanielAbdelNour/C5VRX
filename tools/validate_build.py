@@ -389,10 +389,11 @@ check("stored legacy gain profiles migrate to default V2",
       "settings.rx_profile == RX_PROFILE_ARC_V3_EXP" in all_c and
       "RX_PROFILE_ARC_V3_EXP : RX_PROFILE_DIRECT_GAIN" in all_c)
 
-check("RF menu preserves BW control and adds two-second profile selector",
-      "LONG:BW  2S:PROFILE" in all_c and
-      "btn_ticks >= 40" in all_c and
-      "cycle_rx_profile();" in all_c)
+check("RF menu offers only native AGC plus BW control; no on-screen profile selector",
+      '"NATIVE HW AGC"' in all_c and
+      '"LONG: BANDWIDTH"' in all_c and
+      "2S:PROFILE" not in all_c and
+      "btn_profile_fired" not in all_c)
 check("VIDEO menu has only the Golden live demodulator",
       "LONG:DAC - APPLIES ON EXIT" in all_c and
       "cycle_demod_mode();" not in all_c and
@@ -700,6 +701,22 @@ check("Direct Gain V3 is the sole experimental automatic gain writer",
       'direct_gain_v3_tick(&s_direct_gain_v3' in video_c and
       'direct_gain_v3_sync_applied(&s_direct_gain_v3' in video_c and
       'V3 is the sole actuator in this experimental build.' in video_c)
+rf_c = read(MAIN / "rf.c")
+check("Issue #119 P8ENV origin-collapse oracle is on-demand and read-only",
+      '#include "phase8_envelope.h"' in video_c and
+      "} else if (c == 'E') {" in video_c and
+      "p8env_capture_report();" in video_c and
+      "p8env_add(&acc" in video_c)
+check("Native HW AGC experiment never disables vendor AGC and blocks firmware gain writes",
+      re.search(r"if \(!s_native_agc\) \{\s*phy_disable_agc\(\);", rf_c) and
+      re.search(r"void rf_set_rx_gain\(bool force, uint8_t gain_idx\)\s*\{[^}]*"
+                r"if \(s_native_agc\) \{\s*\+\+s_native_agc_blocked_writes;\s*return;", rf_c) and
+      "if (rf_native_agc_active()) return s_current_gain;" in video_c and
+      "} else if (c == 'N') {" in video_c)
+check("Native HW AGC is the default boot gain owner; firmware gain needs explicit NVS 0",
+      re.search(r"static bool native_agc_boot_requested\(void\)\s*\{\s*nvs_handle_t handle;\s*"
+                r"uint8_t value = 1u;", rf_c) and
+      "return value != 0u;" in rf_c)
 check("RSSI probe owns every AGC/BW/AFC write during its measurement",
       "s_rssi_probe_active = true;" in video_c and
       "if (s_rssi_probe_active) continue;" in video_c and
