@@ -34,6 +34,7 @@ static void test(video_standard_t standard)
     unsigned field = pal ? 625 : 525;
     unsigned fields = MENU_FIELDS;
     unsigned eq = pal ? 5 : 6;
+    unsigned ui_lines = 0, ui_min = ~0u, ui_max = 0;
     used = nodes = 0;
     menu_raster_init(&raster, standard);
     memset(raster.ui, 60, sizeof(raster.ui));
@@ -63,7 +64,7 @@ static void test(video_standard_t standard)
                 (line > 5 && line < 622 && (line < 310 || line > 318)) :
                 (line > 6 && line < 623 && (line < 311 || line > 319)));
             bool varies = false;
-            for (unsigned x = 188; x < MENU_PREFIX_BYTES; ++x) {
+            for (unsigned x = 188; x < menu_prefix_bytes(standard); ++x) {
                 unsigned value = waveform[at + x];
                 if (burst_enabled && x >= burst && x < burst + count) {
                     assert(value >= 12 && value <= 28);
@@ -76,8 +77,36 @@ static void test(video_standard_t standard)
                 } else assert(value == 20);
             }
             assert(varies == burst_enabled);
+
+            /* UI placement: rows occupy exactly [prefix, prefix + row) on
+             * the repeated, vertically centred lines and nowhere else. */
+            unsigned k = pos / 2;
+            unsigned halves = pos + 1 < field ? 2 : 1;
+            unsigned line_len = menu_half_sample(standard, h + halves) - at;
+            unsigned prefix = menu_prefix_bytes(standard);
+            unsigned first = menu_ui_first_line(standard);
+            bool ui_line = k >= first &&
+                           k < first + menu_ui_y_repeat(standard) * MENU_UI_LINES;
+            for (unsigned x = 0; x < line_len; ++x) {
+                bool in_ui = ui_line && x >= prefix && x < prefix + MENU_UI_BYTES;
+                assert((waveform[at + x] == 60) == in_ui);
+            }
+            if (ui_line) {
+                ++ui_lines;
+                assert(line_len - prefix - MENU_UI_BYTES >= 60); /* >= 1.5 us front porch */
+                if (k < ui_min) ui_min = k;
+                if (k > ui_max) ui_max = k;
+            }
         }
     }
+    /* Both fields carry the full UI; it stays inside the active picture and
+     * is centred vertically (in lines) and horizontally (in samples). */
+    unsigned active_first = pal ? 25 : 21, active_last = pal ? 311 : 261;
+    assert(ui_lines == fields * menu_ui_y_repeat(standard) * MENU_UI_LINES);
+    assert(ui_min >= active_first && ui_max <= active_last);
+    assert(abs((int)(ui_min - active_first) - (int)(active_last - ui_max)) <= 1);
+    double active_mid = pal ? (10.35 + 62.35) / 2 * 40 : (9.4 + 63.5556 - 1.5) / 2 * 40;
+    assert(fabs(menu_prefix_bytes(standard) + MENU_UI_BYTES / 2.0 - active_mid) <= 4.0);
     /* Burst samples must correlate with the selected carrier, not a luma
      * rectangle or an IQ pattern. Check all starting phases. */
     double omega = 6.283185307179586 *
@@ -96,8 +125,11 @@ static void test(video_standard_t standard)
         assert(fabs(119438.0 * 40000000 / used - 315000000.0 / 88) < 12.0);
         assert(fabs(used / (40000000.0 * 1001 / 30000) - 1) < 0.000001);
     }
-    printf("%s: %u samples, %u fields, %u DMA nodes; sync, burst, alignment and colour-loop closure OK\n",
-           pal ? "PAL" : "NTSC", used, fields, nodes);
+    printf("%s: %u samples, %u fields, %u DMA nodes; UI lines %u..%u (%u per field) at %.2f..%.2f us; "
+           "sync, burst, alignment and colour-loop closure OK\n",
+           pal ? "PAL" : "NTSC", used, fields, nodes, ui_min, ui_max, ui_lines / fields,
+           menu_prefix_bytes(standard) / 40.0,
+           (menu_prefix_bytes(standard) + MENU_UI_BYTES) / 40.0);
 }
 
 int main(void)
